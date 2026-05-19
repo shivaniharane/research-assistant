@@ -1,0 +1,17 @@
+{
+  "version": "v2",
+  "description": "Experimental - higher semantic weight",
+  "created_at": "2026-01-02",
+  "config": {
+    "embedding_model": "embed-english-v3.0",
+    "rerank_model": "rerank-english-v3.0",
+    "chat_model": "command-r-08-2024",
+    "chunk_size": 2048,
+    "chunk_overlap": 512,
+    "bm25_weight": 0.1,
+    "chroma_weight": 0.9,
+    "bm25_top_k": 2,
+    "chroma_top_k": 7,
+    "rerank_top_n": 5
+  }
+}

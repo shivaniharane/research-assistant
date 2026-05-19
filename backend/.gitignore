@@ -1,0 +1,16 @@
+# Never commit secrets
+.env
+
+# Virtual environment — too large, reinstalled from requirements.txt
+venv/
+
+# Python cache files — auto-generated, not needed
+__pycache__/
+*.pyc
+*.pyo
+
+# ChromaDB data — too large for git
+data/
+
+# Pytest cache
+.pytest_cache/

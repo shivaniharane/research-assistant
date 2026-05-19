@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 15s      # collect metrics every 15 seconds
+  evaluation_interval: 15s  # evaluate rules every 15 seconds
+
+scrape_configs:
+  - job_name: "rag_backend"
+    static_configs:
+      - targets: ["backend:8000"]   # backend service name from docker-compose
