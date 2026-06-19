@@ -10,9 +10,10 @@ Built with a full LLMOps stack: LlamaParse document parsing, hierarchical retrie
 
 ![Chat Interface](assets/chat-screenshot.png)
 
+![Assistant Response](assets/Research_Assistant_Response.png)
+
 ![Monitoring Dashboard](assets/monitoring-screenshot.png)
 
-![Assistant Response](assets/Research_Assistant_Response.png)
 
 ---
 
