@@ -264,6 +264,4 @@ RAG keeps the LLM general-purpose and retrieves context at query time. Fine-tuni
 
 ## 👩‍💻 Author
 
-Built by **Shivani Harane** as part of a research assistantship in the MS Computer Science program.
-
-**Get in touch:** [LinkedIn](https://linkedin.com/in/shivaniharane) · [GitHub](https://github.com/shivaniharane)
+Built by **Shivani Harane** 
