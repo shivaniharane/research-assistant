@@ -1,4 +1,4 @@
-# 🔬 RAG Research Paper Assistant
+# 🔬 AI Research Assistant
 
 A production-ready AI-powered research assistant that lets you upload academic papers and ask questions in plain English — getting cited, accurate answers in seconds.
 
