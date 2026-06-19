@@ -8,11 +8,9 @@ Built with a full LLMOps stack: LlamaParse document parsing, hierarchical retrie
 
 ## 📸 Screenshots
 
-### Chat Interface
-![Chat Interface](E:\rag_research_assistant\assets\chat-screenshot.png)
+![Chat Interface](assets/chat-screenshot.png)
 
-### Monitoring Dashboard
-![Monitoring Dashboard](E:\rag_research_assistant\assets\monitoring-screenshot.png)
+![Monitoring Dashboard](assets/monitoring-screenshot.png)
 
 ---
 
