@@ -16,3 +16,8 @@ python-json-logger
 pytest
 pytest-mock
 prometheus-fastapi-instrumentator
+llama-cloud-services
+llama-index-core
+qdrant-client
+langchain-qdrant
+llama-parse==0.5.14

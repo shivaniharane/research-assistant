@@ -1,75 +1,106 @@
 import logging
-
-# modern Python way to handle file paths
 from pathlib import Path
 
-from langchain_chroma import Chroma
 from langchain_cohere import CohereEmbeddings
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from pdfminer.high_level import extract_text as extract_pdf_text
+from langchain_qdrant import QdrantVectorStore
+from llama_parse import LlamaParse
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
 
 from app.config import settings
 
-# This sets up logging so we can see what the app is doing
-# Instead of print() statements, we use logger.info()
 logger = logging.getLogger(__name__)
 
+CHILD_COLLECTION = "child_chunks"
+PARENT_COLLECTION = "parent_chunks"
 
-def extract_text_from_pdf(pdf_path: Path) -> str:
+
+def get_qdrant_client() -> QdrantClient:
+    """Create Qdrant client connection."""
+    return QdrantClient(
+        host=settings.qdrant_host,
+        port=settings.qdrant_port,
+    )
+
+
+def get_embedding_model() -> CohereEmbeddings:
+    """Create Cohere embedding model."""
+    return CohereEmbeddings(
+        model=settings.embedding_model,
+        cohere_api_key=settings.cohere_api_key,
+    )
+
+
+def ensure_collections_exist(client: QdrantClient) -> None:
     """
-    Step 1: Open a PDF and extract all its text.
-    Handles spaced-out characters from certain PDF encodings.
+    Create Qdrant collections if they do not exist.
+    Child collection — small chunks, searched during retrieval.
+    Parent collection — large chunks, fetched for LLM context.
+    Both use 1024-dim Cohere embeddings with cosine similarity.
     """
-    import re
-    logger.info(f"Extracting text from {pdf_path.name}")
+    existing = [c.name for c in client.get_collections().collections]
 
-    with open(pdf_path, "rb") as f:
-        raw_text = extract_pdf_text(f)
+    if CHILD_COLLECTION not in existing:
+        client.create_collection(
+            collection_name=CHILD_COLLECTION,
+            vectors_config=VectorParams(
+                size=1024,
+                distance=Distance.COSINE
+            )
+        )
+        logger.info(f"Created Qdrant collection: {CHILD_COLLECTION}")
 
-    # Step 1: collapse newlines into spaces
-    cleaned = " ".join(raw_text.split("\n"))
-
-    # Step 2: detect if text has single-char spacing issue
-    # Pattern: "a t t e n t i o n" — every char separated by space
-    single_char_pattern = re.findall(r'\b[a-zA-Z] [a-zA-Z] [a-zA-Z]\b', cleaned)
-    total_words = len(cleaned.split())
-
-    if total_words > 0 and len(single_char_pattern) / total_words > 0.1:
-        logger.info("Detected spaced-out character encoding — fixing...")
-        # Only remove spaces that are between SINGLE characters
-        # This preserves spaces between real words
-        cleaned = re.sub(r'(?<!\w)([a-zA-Z]) (?=[a-zA-Z] )', r'\1', cleaned)
-        cleaned = re.sub(r'(?<=[a-zA-Z]{1}) ([a-zA-Z])(?!\w)', r'\1', cleaned)
-
-    # Step 3: collapse multiple spaces
-    cleaned = re.sub(r' {2,}', ' ', cleaned).strip()
-
-    logger.info(f"Extracted {len(cleaned)} characters")
-    return cleaned
+    if PARENT_COLLECTION not in existing:
+        client.create_collection(
+            collection_name=PARENT_COLLECTION,
+            vectors_config=VectorParams(
+                size=1024,
+                distance=Distance.COSINE
+            )
+        )
+        logger.info(f"Created Qdrant collection: {PARENT_COLLECTION}")
 
 
-def split_into_chunks(text: str, source_name: str) -> list[Document]:
+def extract_text_with_llamaparse(pdf_path: Path) -> str:
+    """Extract clean markdown text from PDF using LlamaParse."""
+    logger.info(f"Extracting text from {pdf_path.name} using LlamaParse")
+
+    parser = LlamaParse(
+        api_key=settings.llama_parse_api_key,
+        result_type="markdown",
+        verbose=False,
+    )
+
+    documents = parser.load_data(str(pdf_path))
+    full_text = "\n\n".join([doc.text for doc in documents])
+
+    logger.info(f"Extracted {len(full_text)} characters from {pdf_path.name}")
+    return full_text
+
+
+def create_parent_chunks(text: str, source_name: str) -> list[Document]:
     """
-    Step 2: Split long text into smaller overlapping chunks.
-    Each chunk becomes a Document object with metadata.
+    Create LARGE parent chunks — full sections.
+    These are sent to the LLM for complete context.
+    Size: 2000 chars, overlap: 200.
     """
-    logger.info(f"Splitting text into chunks")
-
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=settings.chunk_size,
-        chunk_overlap=settings.chunk_overlap,
+        chunk_size=2000,
+        chunk_overlap=200,
+        separators=["\n## ", "\n### ", "\n\n", "\n", ". ", " ", ""]
     )
 
     chunks = splitter.split_text(text)
 
-    # Wrap each chunk in a Document object
-    # Document has two parts: the text content + metadata about where it came from
-    documents = [
+    parents = [
         Document(
             page_content=chunk,
             metadata={
                 "source": source_name,
+                "parent_id": f"{source_name}_parent_{i}",
+                "chunk_type": "parent",
                 "chunk_index": i,
                 "total_chunks": len(chunks)
             }
@@ -77,49 +108,95 @@ def split_into_chunks(text: str, source_name: str) -> list[Document]:
         for i, chunk in enumerate(chunks)
     ]
 
-    logger.info(f"Created {len(documents)} chunks from {source_name}")
-    return documents
+    logger.info(f"Created {len(parents)} parent chunks from {source_name}")
+    return parents
 
 
-def store_in_chromadb(documents: list[Document]) -> None:
+def create_child_chunks(parents: list[Document]) -> list[Document]:
     """
-    Step 3: Convert chunks to embeddings and store in ChromaDB.
+    Create SMALL child chunks from each parent.
+    These are searched during retrieval.
+    Each child stores parent_id to fetch its parent later.
+    Size: 400 chars, overlap: 50.
     """
-    logger.info("Storing documents in ChromaDB")
-
-    # Create the embedding model
-    # This converts text into numbers (vectors) that capture meaning
-    embedding_model = CohereEmbeddings(
-        model=settings.embedding_model,
-        cohere_api_key=settings.cohere_api_key,
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=400,
+        chunk_overlap=50,
+        separators=["\n\n", "\n", ". ", " ", ""]
     )
 
-    # Store in ChromaDB
-    # persist_directory means data is saved to disk, not lost when app restarts
-    Chroma.from_documents(
+    children = []
+    for parent in parents:
+        child_texts = splitter.split_text(parent.page_content)
+        for j, child_text in enumerate(child_texts):
+            children.append(
+                Document(
+                    page_content=child_text,
+                    metadata={
+                        "source": parent.metadata["source"],
+                        "parent_id": parent.metadata["parent_id"],
+                        "chunk_type": "child",
+                        "child_index": j,
+                    }
+                )
+            )
+
+    logger.info(f"Created {len(children)} child chunks")
+    return children
+
+
+def store_in_qdrant(
+    documents: list[Document],
+    collection_name: str,
+) -> None:
+    """
+    Store documents with embeddings in Qdrant.
+    Used for both parent and child collections.
+    """
+    logger.info(
+        f"Storing {len(documents)} docs in "
+        f"Qdrant collection: {collection_name}"
+    )
+
+    client = get_qdrant_client()
+    embedding_model = get_embedding_model()
+
+    ensure_collections_exist(client)
+
+    QdrantVectorStore.from_documents(
         documents=documents,
         embedding=embedding_model,
-        persist_directory=str(settings.vectorstore_dir),
+        collection_name=collection_name,
+        url=f"http://{settings.qdrant_host}:{settings.qdrant_port}",
     )
 
-    logger.info(f"Stored {len(documents)} chunks in ChromaDB")
+    logger.info(f"Stored {len(documents)} docs in {collection_name}")
 
 
 def ingest_pdf(pdf_path: Path) -> dict:
     """
-    Main function that runs all 3 steps together.
-    This is what the API endpoint will call.
+    Full hierarchical ingestion pipeline:
+    PDF → LlamaParse → parent chunks → child chunks
+        → store both in Qdrant
     """
-    # Make sure storage folders exist
-    settings.vectorstore_dir.mkdir(parents=True, exist_ok=True)
+    # Step 1: Extract clean text
+    text = extract_text_with_llamaparse(pdf_path)
 
-    # Run the 3 steps in order
-    text = extract_text_from_pdf(pdf_path)
-    documents = split_into_chunks(text, source_name=pdf_path.name)
-    store_in_chromadb(documents)
+    # Step 2: Create large parent chunks for LLM context
+    parents = create_parent_chunks(text, source_name=pdf_path.name)
+
+    # Step 3: Create small child chunks for retrieval
+    children = create_child_chunks(parents)
+
+    # Step 4: Store both in Qdrant
+    store_in_qdrant(parents, PARENT_COLLECTION)
+    store_in_qdrant(children, CHILD_COLLECTION)
 
     return {
         "filename": pdf_path.name,
-        "chunks_created": len(documents),
-        "status": "success"
+        "parent_chunks": len(parents),
+        "child_chunks": len(children),
+        "status": "success",
+        "parser": "llamaparse",
+        "database": "qdrant"
     }
